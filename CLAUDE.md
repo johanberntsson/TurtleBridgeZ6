@@ -30,4 +30,19 @@ There are no tests. To check a change, play it. Headless recipes:
 
 **Units.** sfrotz reports a 640x400 screen and pixel-doubled picture sizes; Ozmoo reports 320x200. `InitScreen` gets `scale` from the backdrop's `picture_data` height divided by `GAME_H`. Every coordinate is art pixels × `scale`, relative to the centred origin.
 
-**Game loop.** `@read_char 1 1 TickOver` is a 0.1 s tick. A key moves the player straight away. Every `step_ticks` timeouts, `WorldStep()` advances the turtles, fish and the men on the cliffs. `ShowState()` then maps the game state onto slots, and `Flush()` redraws only what changed.
+**Game loop.** `@read_char 1 1 TickOver` is a 0.1 s tick. A key moves the player straight away. Every `step_ticks` timeouts, `WorldStep()` advances the turtles, fish and the men on the cliffs. `ShowState()` then maps the game state onto slots, and `Flush()` redraws only what changed. World time only counts timeouts, so fast key presses slow the world slightly.
+
+## Status (2026-09-26)
+
+It is a fun side project, first playable version committed (`ef02161`). The story file is 8.5K and the blorb has 126 pictures.
+
+- **Verified:** it plays in sfrotz and on the MEGA65 under xemu, driven by scripts rather than played by hand. The screens match, and the MEGA65 keeps up at roughly real time: 40 world steps in about 30 s, against 0.7 s per step nominal.
+- **Not tested:** the X16 build and Windows Frotz.
+- **The layout is a reconstruction.** The sheet doesn't record where segments go, so the positions in `build_slots()` were chosen by eye, not taken from the original LCD.
+- **The rules are approximations of the original:**
+  - A fish swims toward a turtle. The turtle dips its head (`T_EAT`, 2 steps, still safe), then dives (`T_DIVE`, and anyone on it falls), then stays under 3–5 steps.
+  - The sender hands over a package one step after the player reaches the left shore empty-handed. The receiver takes it one step after arrival on the right.
+  - Scoring is +1 per step onto a turtle while carrying, +10 per delivery. 300 points clears the misses.
+  - Game B is faster, with more fish and longer dives.
+- **Unused sprites:** some are still unused (`C0`, `C3`, `D2`, `F2`, `F3`), and so are the sheet's "GAME A/B" labels.
+- **Possible upstream change:** `make_blorb.py` could gain shared-palette/adaptive and transparency support, which would shrink `make_graphics.py` to sprite cutting.
