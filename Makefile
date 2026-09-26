@@ -12,18 +12,20 @@ XMEGA65 = xemu-xmega65 -besure
 # x16_turtlebridge/ beside the zip, so there is nothing to unzip either.
 OZMOOBUILD = ruby $(OZMOO)/make.rb
 
-PICSRC   = resources/contents.yaml $(wildcard resources/*.png)
-STORYSRC = turtlebridge.inf ../lib/ext_z6graphics.h $(wildcard $(PUNY)/lib/*.h)
+PICSRC   = TurtleBridgeGraphics.png tools/make_graphics.py
+STORYSRC = turtlebridge.inf graphics.h $(PUNY)/lib/ext_z6graphics.h
 
 all: sfrotz
 
-turtlebridge.z6: $(STORYSRC) turtlebridge.blb
-	$(INFORM) --opt OMIT_SYMBOL_TABLE=1 --define RUNTIME_ERRORS=0  +$(PUNY)/lib -v6 -es turtlebridge.inf
+turtlebridge.z6: $(STORYSRC)
+	$(INFORM) --opt OMIT_SYMBOL_TABLE=1 +$(PUNY)/lib -v6 -es turtlebridge.inf
 
 z6: turtlebridge.z6
 
-turtlebridge.blb: $(PICSRC)
-	python $(OZMOO)/tools/make_blorb.py resources
+# make_graphics.py cuts the sprites out of the sheet and writes the Blorb (with
+# make_blorb.py's helpers), graphics.h for the story, and pics/preview*.png.
+turtlebridge.blb graphics.h &: $(PICSRC)
+	python3 tools/make_graphics.py TurtleBridgeGraphics.png $(OZMOO)/tools
 
 blorb: turtlebridge.blb
 
@@ -38,11 +40,11 @@ mega65_turtlebridge.d81: turtlebridge.blb turtlebridge.z6
 mega65: mega65_turtlebridge.d81
 	$(XMEGA65) -8 mega65_turtlebridge.d81
 
-.PHONY: all z5-release z5-debug blorb z6 x16 mega65 test frotz sfrotz release clean
+.PHONY: all blorb z6 mega65 sfrotz clean
 
 sfrotz: turtlebridge.z6 turtlebridge.blb
 	# the blorb has to be named: sfrotz does not pick it up from the story name
 	$(SFROTZ) turtlebridge.z6 turtlebridge.blb
 
 clean:
-	rm -rf turtlebridge.z5 turtlebridge.z6 turtlebridge.blb pics *.d64 *.d81 
+	rm -rf turtlebridge.z6 turtlebridge.blb graphics.h pics *.d81 x16_turtlebridge x16_turtlebridge.zip

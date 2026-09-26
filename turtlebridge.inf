@@ -1,4 +1,483 @@
-[ main;
-    print "hello^";
+! Turtle Bridge -- a Game & Watch style arcade game for the Z-machine, v6.
+!
+! Carry packages from the man on the left cliff to the man on the right,
+! stepping across the backs of five turtles. A turtle that spots a fish
+! dips its head and then dives for it: be off its back by then, and never
+! step onto a turtle that is under water. Three misses and the game is over.
+!
+! The screen works like an LCD game: every sprite has a fixed place, and a
+! "slot" (graphics.h) shows at most one of its sprites at a time. Changing a
+! slot draws its clear picture (the backdrop behind it) and then redraws the
+! sprites of the slots that clear picture overlapped. graphics.h is written
+! by tools/make_graphics.py, along with the Blorb.
+
+
+Include "ext_z6graphics";
+Include ">graphics.h";
+
+Release 1;
+
+! ------------------------------------------------------------------------
+! Screen
+! ------------------------------------------------------------------------
+
+Constant BLACK = 2;
+Constant WHITE = 9;
+
+Global screen_w;        ! screen size in units
+Global screen_h;
+Global scale;           ! units per art pixel: 1 in Ozmoo, 2 in sfrotz
+Global origin_x;        ! the game area's top left, in units (1-based)
+Global origin_y;
+
+Array slot_pic --> NUM_SLOTS;   ! the sprite each slot shows, or 0
+Array slot_dirty -> NUM_SLOTS;
+Array slot_redraw -> NUM_SLOTS;
+
+[ DrawPic p _x _y;
+    _x = origin_x + (pic_x-->p) * scale;
+    _y = origin_y + (pic_y-->p) * scale;
+    @draw_picture p _y _x;
 ];
 
+[ SetSlot s p;
+    if (slot_pic-->s ~= p) {
+        slot_pic-->s = p;
+        slot_dirty->s = 1;
+    }
+];
+
+! Put every changed slot on the screen.
+[ Flush s i;
+    for (s = 0 : s < NUM_SLOTS : s++) {
+        if (slot_dirty->s) {
+            DrawPic(slot_clear-->s);
+            for (i = slot_ovl_start-->s : slot_ovl->i ~= 255 : i++)
+                slot_redraw->(slot_ovl->i) = 1;
+        }
+    }
+    for (s = 0 : s < NUM_SLOTS : s++) {
+        if (slot_redraw->s && slot_pic-->s) DrawPic(slot_pic-->s);
+        slot_dirty->s = 0;
+        slot_redraw->s = 0;
+    }
+];
+
+! Draw the whole game area from scratch.
+[ Redraw s;
+    DrawPic(PIC_BACKDROP);
+    for (s = 0 : s < NUM_SLOTS : s++) {
+        if (slot_pic-->s) DrawPic(slot_pic-->s);
+        slot_dirty->s = 0;
+        slot_redraw->s = 0;
+    }
+];
+
+[ InitScreen _h;
+    screen_w = 0-->17;  ! header $22: screen width in units
+    screen_h = 0-->18;  ! header $24: screen height in units
+    ! The Blorb stores the pictures for a 640x400 screen, and interpreters
+    ! that show them at that size (sfrotz, Windows Frotz) also count units
+    ! in those pixels; Ozmoo halves them back to 320x200. The backdrop's
+    ! height tells the two apart.
+    _h = Z6PictureHeight_Units(PIC_BACKDROP);
+    scale = _h / GAME_H;
+    if (scale < 1) scale = 1;
+    origin_x = (screen_w - GAME_W * scale) / 2 + 1;
+    origin_y = (screen_h - GAME_H * scale) / 2 + 1;
+    if (origin_x < 1) origin_x = 1;
+    if (origin_y < 1) origin_y = 1;
+
+    @set_colour WHITE BLACK;
+    @set_window 0;
+    @window_style 0 0 0;
+    @buffer_mode 0;
+    @erase_window 0;
+    ! The borders beside the game area hold a few lines of text each.
+    Z6ShowWindow_Units(1, 1, 1, origin_x - 1, screen_h);
+    Z6ShowWindow_Units(2, origin_x + GAME_W * scale, 1,
+        screen_w - (origin_x + GAME_W * scale) + 1, screen_h);
+    @window_style 1 0 0;
+    @window_style 2 0 0;
+    @set_window 0;
+    @set_cursor -1 0;
+];
+
+! Replace the text in a border window: window 1 (left) or 2 (right).
+[ BorderText w l1 l2 l3 l4 l5 _f;
+    @set_window w;
+    @set_colour WHITE BLACK;
+    @erase_window w;
+    @set_font 4 -> _f;
+    BorderLine(w, 2, l1);
+    BorderLine(w, 3, l2);
+    BorderLine(w, 5, l3);
+    BorderLine(w, 6, l4);
+    BorderLine(w, 8, l5);
+    @set_window 0;
+    @set_cursor -1 0;
+];
+
+[ BorderLine w row s _x _y;
+    if (s == 0) return;
+    _x = Z6FontWidth() + 1;     ! one character in from the edge
+    _y = (row - 1) * Z6FontHeight() + 1;
+    @set_cursor _y _x w;
+    print (string) s;
+];
+
+! ------------------------------------------------------------------------
+! Input
+! ------------------------------------------------------------------------
+
+Constant TICK = 1;      ! read_char waits this many tenths of a second
+
+[ TickOver; rtrue; ];
+
+! A key, or 0 when TICK passes without one.
+[ ReadKey _k;
+    @read_char 1 TICK TickOver -> _k;
+    if (_k >= 'A' && _k <= 'Z') _k = _k + 32;
+    return _k;
+];
+
+[ WaitKey _k;
+    do { @read_char 1 -> _k; } until (_k ~= 0);
+    if (_k >= 'A' && _k <= 'Z') _k = _k + 32;
+    return _k;
+];
+
+Constant KEY_NONE  = 0;
+Constant KEY_LEFT  = 1;
+Constant KEY_RIGHT = 2;
+Constant KEY_QUIT  = 3;
+Constant KEY_PAUSE = 4;
+
+[ KeyAction k;
+    switch (k) {
+    131, 'z', 'a', ',', 'j': return KEY_LEFT;
+    132, 'x', 'd', '.', 'l': return KEY_RIGHT;
+    'q', 27: return KEY_QUIT;
+    'p', ' ': return KEY_PAUSE;
+    }
+    return KEY_NONE;
+];
+
+! ------------------------------------------------------------------------
+! The game
+! ------------------------------------------------------------------------
+
+Constant T_SWIM  = 0;   ! on the surface: safe to stand on
+Constant T_EAT   = 1;   ! head dipped at a fish: still safe, but not for long
+Constant T_DIVE  = 2;   ! going under: anyone on its back falls in
+Constant T_UNDER = 3;   ! gone
+
+Constant MAX_FISH = 3;
+
+Global mode;            ! 'a' or 'b'
+Global score;
+Global misses;
+Global step_ticks;      ! ticks between moves of the world
+Global ticks;
+Global steps;
+
+Global ppos;            ! 0 = left shore, 1..5 = turtles, 6 = right shore
+Global carrying;
+Global falling;         ! steps left of the fall, or 0
+
+Global sender_timer;    ! steps left showing the handover
+Global receiver_state;  ! 0 idle, 1 taking, 2 lifting
+Global receiver_timer;
+
+Array turtle_state --> 6;   ! 1..5
+Array turtle_timer --> 6;
+Array fish_col --> MAX_FISH;    ! 0 = no fish, else the column it is under
+Array fish_target --> MAX_FISH;
+
+[ StartGame k;
+    mode = k;
+    score = 0;
+    misses = 0;
+    steps = 0;
+    ticks = 0;
+    ppos = 0;
+    carrying = 1;
+    falling = 0;
+    sender_timer = 0;
+    receiver_state = 0;
+    receiver_timer = 0;
+    for (k = 1 : k <= 5 : k++) {
+        turtle_state-->k = T_SWIM;
+        turtle_timer-->k = 0;
+    }
+    for (k = 0 : k < MAX_FISH : k++) fish_col-->k = 0;
+    SetSpeed();
+];
+
+[ SetSpeed _base;
+    if (mode == 'b') _base = 5; else _base = 7;
+    step_ticks = _base - score / 60;
+    if (step_ticks < 2) step_ticks = 2;
+];
+
+[ FishWanted _n;
+    _n = 1 + score / 50;
+    if (mode == 'b') _n++;
+    if (_n > MAX_FISH) _n = MAX_FISH;
+    return _n;
+];
+
+[ AddScore n _old;
+    _old = score;
+    score = score + n;
+    if (score > 9999) score = 9999;
+    ! As on many Game & Watch games, 300 points wipes out the misses.
+    if (_old < 300 && score >= 300) misses = 0;
+    SetSpeed();
+];
+
+[ TurtleSafe k;
+    return turtle_state-->k == T_SWIM or T_EAT;
+];
+
+[ Fall;
+    falling = 4;
+    carrying = 0;
+];
+
+[ MovePlayer d _np;
+    if (falling) return;
+    _np = ppos + d;
+    if (_np < 0 || _np > 6) return;
+    ppos = _np;
+    if (ppos >= 1 && ppos <= 5) {
+        if (~~TurtleSafe(ppos)) { Fall(); return; }
+        if (carrying) AddScore(1);
+    }
+];
+
+! One step of the world: turtles, fish and the two men on the cliffs.
+[ WorldStep k f _n _free;
+    steps++;
+
+    ! The men hand over and take packages.
+    if (sender_timer) sender_timer--;
+    if (ppos == 0 && ~~carrying && ~~falling) {
+        carrying = 1;
+        sender_timer = 1;
+    }
+    if (receiver_timer) {
+        receiver_timer--;
+        if (receiver_timer == 0) {
+            if (receiver_state == 1) { receiver_state = 2; receiver_timer = 2; }
+            else receiver_state = 0;
+        }
+    }
+    if (ppos == 6 && carrying && ~~falling) {
+        carrying = 0;
+        receiver_state = 1;
+        receiver_timer = 1;
+        AddScore(10);
+    }
+
+    ! Turtles.
+    for (k = 1 : k <= 5 : k++) {
+        switch (turtle_state-->k) {
+        T_EAT:
+            if (--(turtle_timer-->k) <= 0) {
+                turtle_state-->k = T_DIVE;
+                for (f = 0 : f < MAX_FISH : f++)
+                    if (fish_col-->f == k && fish_target-->f == k)
+                        fish_col-->f = 0;
+                if (ppos == k && ~~falling) Fall();
+            }
+        T_DIVE:
+            turtle_state-->k = T_UNDER;
+            turtle_timer-->k = 2 + random(3);
+            if (mode == 'b') turtle_timer-->k = turtle_timer-->k + 1;
+        T_UNDER:
+            if (--(turtle_timer-->k) <= 0) turtle_state-->k = T_SWIM;
+        }
+    }
+
+    ! Fish swim in from either side towards a turtle, which then eats them.
+    _n = 0;
+    for (f = 0 : f < MAX_FISH : f++) {
+        if (fish_col-->f == 0) continue;
+        _n++;
+        k = fish_col-->f;
+        if (k < fish_target-->f) fish_col-->f = k + 1;
+        else if (k > fish_target-->f) fish_col-->f = k - 1;
+        else if (turtle_state-->k == T_SWIM) {
+            turtle_state-->k = T_EAT;
+            turtle_timer-->k = 2;
+        }
+        else if (turtle_state-->k == T_UNDER) fish_col-->f = 0;
+    }
+    if (_n < FishWanted() && random(3) == 1) {
+        for (f = 0 : f < MAX_FISH : f++) {
+            if (fish_col-->f) continue;
+            k = random(5);
+            _free = true;
+            for (_n = 0 : _n < MAX_FISH : _n++)
+                if (fish_col-->_n && fish_target-->_n == k) _free = false;
+            if (_free && turtle_state-->k == T_SWIM) {
+                fish_target-->f = k;
+                if (random(2) == 1) fish_col-->f = 1; else fish_col-->f = 5;
+            }
+            break;
+        }
+    }
+
+    ! The fall: two steps going in, two splashing, then the miss counts.
+    if (falling) {
+        if (--falling == 0) {
+            misses++;
+            ppos = 0;
+            carrying = 0;
+        }
+    }
+];
+
+! Point every slot at the sprite the game state calls for.
+[ ShowState k f _p;
+    for (k = 1 : k <= 5 : k++) {
+        _p = 0;
+        for (f = 0 : f < MAX_FISH : f++)
+            if (fish_col-->f == k) {
+                if ((steps + k) & 1) _p = PIC_FISH1_A; else _p = PIC_FISH1_B;
+                _p = _p + (k - 1) * (PIC_FISH2_A - PIC_FISH1_A);
+            }
+        SetSlot(SLOT_FISH1 + k - 1, _p);
+
+        switch (turtle_state-->k) {
+        T_SWIM: _p = PIC_TURTLE1_SWIM;
+        T_EAT:  _p = PIC_TURTLE1_EAT;
+        T_DIVE: _p = PIC_TURTLE1_DIVE;
+        default: _p = 0;
+        }
+        if (_p) _p = _p + (k - 1) * (PIC_TURTLE2_SWIM - PIC_TURTLE1_SWIM);
+        SetSlot(SLOT_TURTLE1 + k - 1, _p);
+    }
+
+    for (k = 0 : k <= 6 : k++) {
+        _p = 0;
+        if (k == ppos) {
+            if (falling) {
+                if (falling > 2) _p = PIC_PLAYER1_FALL;
+                else _p = PIC_PLAYER1_SPLASH;
+                _p = _p + (k - 1) * (PIC_PLAYER2_CARRY - PIC_PLAYER1_CARRY);
+            }
+            else switch (k) {
+            0: if (carrying) _p = PIC_PLAYER0_CARRY; else _p = PIC_PLAYER0_EMPTY;
+            6: if (carrying) _p = PIC_PLAYER6_CARRY; else _p = PIC_PLAYER6_EMPTY;
+            default:
+                if (carrying) _p = PIC_PLAYER1_CARRY; else _p = PIC_PLAYER1_EMPTY;
+                _p = _p + (k - 1) * (PIC_PLAYER2_CARRY - PIC_PLAYER1_CARRY);
+            }
+        }
+        SetSlot(SLOT_PLAYER0 + k, _p);
+    }
+
+    if (sender_timer) SetSlot(SLOT_SENDER, PIC_SENDER_GIVE);
+    else SetSlot(SLOT_SENDER, PIC_SENDER_IDLE);
+    switch (receiver_state) {
+    1: SetSlot(SLOT_RECEIVER, PIC_RECEIVER_TAKE);
+    2: SetSlot(SLOT_RECEIVER, PIC_RECEIVER_LIFT);
+    default: SetSlot(SLOT_RECEIVER, PIC_RECEIVER_IDLE);
+    }
+
+    ShowScore(score);
+
+    if (misses) SetSlot(SLOT_MISSLABEL, PIC_MISSLABEL_ON);
+    else SetSlot(SLOT_MISSLABEL, 0);
+    for (k = 1 : k <= 3 : k++) {
+        if (misses >= k) _p = PIC_MISS1_ON + (k - 1) * (PIC_MISS2_ON - PIC_MISS1_ON);
+        else _p = 0;
+        SetSlot(SLOT_MISS1 + k - 1, _p);
+    }
+];
+
+! The score in the four digits, without leading zeros.
+[ ShowScore n _k _d _div;
+    _div = 1000;
+    for (_k = 0 : _k < 4 : _k++) {
+        _d = (n / _div) % 10;
+        if (_d == 0 && n < _div && _k < 3) SetSlot(SLOT_DIGIT1 + _k, 0);
+        else SetSlot(SLOT_DIGIT1 + _k,
+            PIC_DIGIT1_0 + _k * (PIC_DIGIT2_0 - PIC_DIGIT1_0) + _d);
+        _div = _div / 10;
+    }
+];
+
+! Every segment lit, as a Game & Watch shows when it is reset.
+[ ShowAll s;
+    for (s = 0 : s < NUM_SLOTS : s++) SetSlot(s, 0);
+    for (s = 1 : s <= 5 : s++) {
+        SetSlot(SLOT_TURTLE1 + s - 1,
+            PIC_TURTLE1_SWIM + (s - 1) * (PIC_TURTLE2_SWIM - PIC_TURTLE1_SWIM));
+        SetSlot(SLOT_FISH1 + s - 1,
+            PIC_FISH1_A + (s - 1) * (PIC_FISH2_A - PIC_FISH1_A));
+    }
+    SetSlot(SLOT_SENDER, PIC_SENDER_IDLE);
+    SetSlot(SLOT_RECEIVER, PIC_RECEIVER_IDLE);
+    SetSlot(SLOT_PLAYER0, PIC_PLAYER0_CARRY);
+    SetSlot(SLOT_PLAYER6, PIC_PLAYER6_EMPTY);
+    ShowScore(0);
+];
+
+! Returns true if the player quit.
+[ PlayGame _k _a;
+    if (mode == 'b') BorderText(1, "TURTLE", "BRIDGE", "GAME B", 0, 0);
+    else BorderText(1, "TURTLE", "BRIDGE", "GAME A", 0, 0);
+    BorderText(2, "Z/X or", "arrows", "P pause", "Q quit", 0);
+    ShowState();
+    Redraw();
+    while (misses < 3) {
+        _k = ReadKey();
+        if (_k == 0) {
+            if (++ticks >= step_ticks) {
+                ticks = 0;
+                WorldStep();
+            }
+        }
+        else {
+            _a = KeyAction(_k);
+            switch (_a) {
+            KEY_LEFT:  MovePlayer(-1);
+            KEY_RIGHT: MovePlayer(1);
+            KEY_QUIT:  rtrue;
+            KEY_PAUSE:
+                BorderText(2, "PAUSED", 0, "any key", "to go on", 0);
+                WaitKey();
+                BorderText(2, "Z/X or", "arrows", "P pause", "Q quit", 0);
+            }
+        }
+        ShowState();
+        Flush();
+    }
+    rfalse;
+];
+
+[ Main;
+    Game();
+];
+
+[ Game _k;
+    InitScreen();
+    ShowAll();
+    Redraw();
+    BorderText(1, "TURTLE", "BRIDGE", "Game &", "Watch", "style");
+    BorderText(2, "A: game A", "B: game B", "Q: quit", 0, 0);
+    while (true) {
+        _k = WaitKey();
+        if (_k == 'q' or 27) break;
+        if (_k == 'a' or 'b') {
+            StartGame(_k);
+            if (PlayGame()) break;
+            BorderText(2, "GAME OVER", 0, "A: game A", "B: game B", "Q: quit");
+        }
+    }
+    @erase_window -1;
+    quit;
+];
